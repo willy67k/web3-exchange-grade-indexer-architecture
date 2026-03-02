@@ -1,4 +1,4 @@
-import { pgTable, bigint, text, timestamp, numeric, integer, unique, pgEnum, primaryKey, bigserial } from "drizzle-orm/pg-core";
+import { pgTable, bigint, text, timestamp, numeric, integer, unique, pgEnum, primaryKey, bigserial, boolean } from "drizzle-orm/pg-core";
 
 export const blockStatusEnum = pgEnum("block_status", ["pending", "processing", "confirmed", "orphaned", "failed"]);
 export const transferStatusEnum = pgEnum("transfer_status", ["valid", "reverted", "ignored"]);
@@ -66,4 +66,13 @@ export const indexerState = pgTable("indexer_state", {
   lastProcessedBlock: bigint("last_processed_block", { mode: "bigint" }).notNull(),
   lastSafeBlock: bigint("last_safe_block", { mode: "bigint" }).notNull(),
   updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const chainMetadata = pgTable("chain_metadata", {
+  chainId: integer("chain_id").primaryKey(),
+  chainName: text("chain_name").notNull(),
+  rpcUrl: text("rpc_url").notNull(),
+  confirmationBlocks: integer("confirmation_blocks").default(12).notNull(),
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
 });
