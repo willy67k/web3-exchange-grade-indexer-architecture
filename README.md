@@ -1,162 +1,233 @@
-# Blockchain Developer
+# Web3 Exchange-Grade Indexer Architecture (NestJS)
 
-## 技術棧要求：
+# 🎯 系統目標（Architecture Goals）
 
-- Node.js + TypeScript
-- Ethers.js 或 Web3.js
-- REST API
-- 可選：簡單前端（React / TypeScript）展示交易結果
-- 使用 Ethereum Testnet（Goerli / Sepolia）或 EVM 兼容鏈
+這個架構不是「抓 log 玩玩」。
 
-## User Story 1：查詢錢包餘額（Read）
+它要達成的是：
 
-目標：建立一個 REST API，能查詢任意地址的 ETH 和 ERC-20 代幣餘額。
+## 正確性（Correctness）
 
-需求：
+- 不漏事件
+- 不重複寫入
+- Reorg 不污染資料
+- 資料可重建（Full Replay）
 
-- `GET /api/balance/:address`
-- 回傳：
+## 一致性（Consistency）
 
-```json
-{
-  "address": "0xabc...",
-  "ethBalance": "0.123",
-  "tokens": [
-    { "symbol": "USDT", "balance": "100.5" },
-    { "symbol": "DAI", "balance": "50.0" }
-  ]
-}
+- 1 Block = 1 Atomic DB Transaction
+- 不允許半個 block commit
+- 不允許多 worker 同時提交同 block
+
+## 可回滾（Reorg Safe）
+
+- 可偵測 fork
+- 可自動 rollback
+- 可從 fork point 重建資料
+
+## Append-only Ledger
+
+- 不直接更新 balance
+- 所有資產變動寫入 ledger_entries
+- Balance 由聚合計算
+
+## 5️⃣ 可擴展（Scalable）
+
+- 支援多鏈
+- 支援多合約
+- 支援分段重建
+
+## 🏗 系統整體架構
+
+```
+RPC Provider
+│
+▼
+Block Poller (single instance)
+│
+▼
+Redis Queue
+│
+▼
+Block Worker (1 block = 1 job)
+│
+▼
+PostgreSQL (ACID)
 ```
 
-- 使用 Ethers.js 連接 Testnet provider
-- ERC-20 可選幾個示例 token（用 balanceOf 讀取）
+## 🧠 核心設計原則
 
-## User Story 2：發送交易（Write）
+### Block 是最小原子單位
 
-目標：提供 API 讓使用者可以發送 ETH 或 ERC-20 代幣交易。
+1 Block = 1 DB Transaction
 
-需求：
+### 不允許
 
-- `POST /api/transfer`
+- log 級 commit
+- tx 級 commit
+- 部分 block commit
 
-```json
-{
-  "fromPrivateKey": "0x...",
-  "to": "0xrecipient...",
-  "amount": "0.01",
-  "tokenAddress": "0x..." // 可為 null 表示 ETH
-}
+## 資料庫設計（PostgreSQL）
+
+### 1️⃣ blocks
+
+```sql
+CREATE TABLE blocks (
+  block_number BIGINT PRIMARY KEY,
+  block_hash TEXT NOT NULL,
+  parent_hash TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'confirmed',
+  created_at TIMESTAMP DEFAULT NOW()
+);
 ```
 
-- 後端用 Ethers.js / Signer 發送交易
-- 回傳：
+說明
 
-```json
-{
-  "txHash": "0xabc123...",
-  "status": "submitted"
-}
+- 用來偵測 reorg
+- status:
+  - confirmed
+  - orphaned
+
+### 2️⃣ erc20_transfers
+
+```sql
+CREATE TABLE erc20_transfers (
+  id BIGSERIAL PRIMARY KEY,
+  tx_hash TEXT NOT NULL,
+  log_index INT NOT NULL,
+  block_number BIGINT NOT NULL,
+  token_address TEXT NOT NULL,
+  from_address TEXT NOT NULL,
+  to_address TEXT NOT NULL,
+  amount NUMERIC NOT NULL,
+  created_at TIMESTAMP DEFAULT NOW(),
+
+  UNIQUE(tx_hash, log_index)
+);
 ```
 
-- 設定 gasLimit，處理 nonce
+為什麼要 UNIQUE(tx_hash, log_index)？
 
-## User Story 3：智能合約事件監聽
+- 避免重抓
+- 避免重啟重寫
+- 確保 idempotency
 
-目標：監聽一個智能合約事件，將事件記錄到後端 DB 或 log。
+### 3️⃣ ledger_entries（核心）
 
-需求：
+```sql
+CREATE TABLE ledger_entries (
+  id BIGSERIAL PRIMARY KEY,
+  block_number BIGINT NOT NULL,
+  tx_hash TEXT NOT NULL,
+  log_index INT NOT NULL,
+  account TEXT NOT NULL,
+  token_address TEXT NOT NULL,
+  delta_amount NUMERIC NOT NULL,
+  direction TEXT NOT NULL,
+  created_at TIMESTAMP DEFAULT NOW(),
 
-- 監聽 ERC-20 Transfer 事件或自訂合約事件
-- 當事件發生：
-  - Log from, to, value, txHash
-  - 可選：存入 SQLite / JSON file / MongoDB
+  UNIQUE(tx_hash, log_index, account)
+);
+```
 
-提示：
+原則
+
+- 永遠 INSERT
+- 永遠不 UPDATE
+- 永遠不 DELETE（除非 reorg）
+
+### Balance 計算方式
+
+```sql
+SELECT SUM(delta_amount)
+FROM ledger_entries
+WHERE account = $1
+AND token_address = $2;
+```
+
+## Reorg Handling 流程
+
+### Step 1 — 偵測
 
 ```ts
-contract.on("Transfer", (from, to, value, event) => {
-  console.log(
-    `Transfer: ${from} -> ${to}, value: ${ethers.formatUnits(value, 18)}`,
-  );
+if (chainBlock.hash !== dbBlock.block_hash) {
+  reorgDetected();
+}
+```
+
+### Step 2 — 找 fork point
+
+從最新 block 向後比對 parent_hash
+
+### Step 3 — Rollback
+
+```sql
+DELETE FROM ledger_entries
+WHERE block_number >= fork_point;
+
+DELETE FROM erc20_transfers
+WHERE block_number >= fork_point;
+
+DELETE FROM blocks
+WHERE block_number >= fork_point;
+```
+
+### Step 4 — 重新處理 fork_point 之後區塊
+
+## Block Worker Transaction 範例流程
+
+```ts
+await db.transaction(async (tx) => {
+  // 1. insert transfers
+  // 2. insert ledger entries
+  // 3. insert block record
 });
 ```
 
-## User Story 4（進階可選）：合約互動
-
-目標：提供 API 調用自訂合約方法，例如 mint 或 swap。
-
-需求：
-
-- POST `/api/contract/call`
-
-```json
-{
-  "method": "mint",
-  "args": ["0xrecipient...", "1000"]
-}
-```
-
-- 後端使用 Ethers.js 對智能合約呼叫 method
-- 回傳 txHash
-
-## 評分重點（對應 JD）
-
-| 技能             | 評分指標                                        |
-| ---------------- | ----------------------------------------------- |
-| Node.js Backend  | REST API 設計、錯誤處理、整潔程式碼             |
-| Ethers.js / Web3 | Provider/Signer、read/write、事件監聽、交易流程 |
-| Blockchain 實務  | Testnet 上成功查餘額、送交易、事件監控          |
-| API 整合         | 前端或 Postman 可呼叫 API                       |
-| 安全 / Gas       | gasLimit、nonce 處理正確                        |
-
-## 💡 Tips for 面試加分：
-
-- 可以在前端簡單顯示錢包餘額或交易 hash
-- 用 environment variables 管理 private keys & RPC URL
-- 有事件監聽 → 展示你理解後端如何整合鏈上事件
-
-## Turborepo 專案資料夾結構骨架
+如果其中任何一個失敗：
 
 ```
-blockchain-ethers/
-├─ package.json                  # Turborepo 根 package.json
-├─ turbo.json                    # Turborepo config
-├─ yarn.lock
-├─ packages/
-│   ├─ backend/                  # Nest.js Backend
-│   │   ├─ package.json
-│   │   ├─ tsconfig.json
-│   │   ├─ src/
-│   │   │   ├─ main.ts
-│   │   │   ├─ app.module.ts
-│   │   │   ├─ balance/
-│   │   │   │   ├─ balance.module.ts
-│   │   │   │   ├─ balance.controller.ts
-│   │   │   │   └─ balance.service.ts
-│   │   │   ├─ transfer/
-│   │   │   │   ├─ transfer.module.ts
-│   │   │   │   ├─ transfer.controller.ts
-│   │   │   │   └─ transfer.service.ts
-│   │   │   └─ events/
-│   │   │       ├─ events.module.ts
-│   │   │       └─ events.service.ts
-│   │   └─ .env
-│   └─ frontend/                 # React + TypeScript Frontend
-│       ├─ package.json
-│       ├─ tsconfig.json
-│       ├─ public/
-│       │   └─ index.html
-│       └─ src/
-│           ├─ main.tsx
-│           ├─ App.tsx
-│           ├─ pages/
-│           │   ├─ Home.tsx
-│           │   └─ Wallet.tsx
-│           ├─ components/
-│           │   ├─ WalletCard.tsx
-│           │   └─ TransactionForm.tsx
-│           └─ services/
-│               ├─ api.ts
-│               └─ web3.ts
+ROLLBACK entire block
+```
+
+## Confirmation Strategy
+
+推薦做法：
 
 ```
+process until currentBlock - 12
+```
+
+這樣可以：
+
+- 幾乎避免 reorg
+- 降低 rollback 成本
+
+## 多鏈支援設計
+
+增加 chain_id 欄位：
+
+```sql
+ALTER TABLE blocks ADD COLUMN chain_id INT NOT NULL;
+ALTER TABLE ledger_entries ADD COLUMN chain_id INT NOT NULL;
+ALTER TABLE erc20_transfers ADD COLUMN chain_id INT NOT NULL;
+```
+
+Primary Key 改為：
+
+```
+(chain_id, block_number)
+```
+
+## 系統要達到的最終能力
+
+| 能力          | 是否達成 |
+| ------------- | -------- |
+| 可補歷史      | ✅       |
+| 可即時追蹤    | ✅       |
+| 可偵測 reorg  | ✅       |
+| 可 rollback   | ✅       |
+| 資料可 replay | ✅       |
+| Ledger 一致性 | ✅       |
+| 多鏈支援      | ✅       |
+| 交易所級設計  | ✅       |
