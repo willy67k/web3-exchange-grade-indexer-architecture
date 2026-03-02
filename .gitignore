@@ -1,0 +1,71 @@
+# ==============================
+# Node.js / JavaScript
+# ==============================
+node_modules/
+npm-debug.log*
+yarn-error.log*
+yarn-debug.log*
+.pnpm-debug.log*
+dist/
+build/
+.env*
+!.env.example
+
+# ==============================
+# TypeScript
+# ==============================
+*.tsbuildinfo
+
+# ==============================
+# Nest.js
+# ==============================
+/dist
+/.nest
+/.cache
+
+# ==============================
+# React / Frontend
+# ==============================
+/frontend/node_modules/
+/frontend/dist/
+/frontend/.cache/
+/frontend/.vite
+/frontend/.env.local
+
+# ==============================
+# Turborepo
+# ==============================
+.cache/
+.turbo/
+**/node_modules/
+
+# ==============================
+# Logs
+# ==============================
+*.log
+logs/
+*.log.*
+debug.log
+yarn-debug.log*
+yarn-error.log*
+
+# ==============================
+# IDE / Editor
+# ==============================
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# ==============================
+# OS
+# ==============================
+.DS_Store
+Thumbs.db
+
+# ==============================
+# Optional
+# ==============================
+*.iml
+*.bak
+*.tmp
