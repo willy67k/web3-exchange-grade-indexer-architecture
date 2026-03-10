@@ -9,7 +9,6 @@ import { BlockchainModule } from "./modules/blockchain/blockchain.module.js";
 import { DatabaseModule } from "./modules/database/database.module.js";
 import { QueueModule } from "./modules/indexer/queue/queue.module.js";
 import { BlockPollerModule } from "./modules/indexer/block-poller/block-poller.module.js";
-import { ProcessorsModule } from "./modules/indexer/processor/processors.module.js";
 
 @Module({
   imports: [
@@ -22,7 +21,6 @@ import { ProcessorsModule } from "./modules/indexer/processor/processors.module.
     DemoModule,
     BlockchainModule,
     QueueModule,
-    ProcessorsModule,
     BlockPollerModule,
   ],
   controllers: [AppController],

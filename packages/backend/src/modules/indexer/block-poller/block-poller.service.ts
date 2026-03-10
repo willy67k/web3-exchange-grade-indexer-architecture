@@ -6,7 +6,7 @@ import { BlockchainService } from "../../blockchain/blockchain.service.js";
 import { DRIZZLE } from "../../database/database.module.js";
 import { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import * as schema from "../../database/schema.js";
-import { BLOCK_QUEUE } from "../../../constants/bullqueue.js";
+import { BLOCK_QUEUE } from "../../../constants/bullQueue.js";
 
 @Injectable()
 export class BlockPollerService {
