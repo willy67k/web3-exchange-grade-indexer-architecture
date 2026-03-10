@@ -1,9 +1,14 @@
 {
   "name": "multi-chain-erc20-indexer",
   "private": true,
-  "workspaces": [
-    "packages/*"
-  ],
+  "workspaces": {
+    "packages": [
+      "packages/*"
+    ],
+    "nohoist": [
+      "**/@nestjs/**"
+    ]
+  },
   "devDependencies": {
     "turbo": "^1.10.0",
     "typescript": "^5.2.0"
