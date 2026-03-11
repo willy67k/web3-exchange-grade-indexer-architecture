@@ -6,7 +6,7 @@ import { BlockchainService } from "../../blockchain/blockchain.service.js";
 import { DRIZZLE } from "../../database/database.module.js";
 import { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import * as schema from "../../database/schema.js";
-import { BLOCK_QUEUE } from "../../../constants/bullQueue.js";
+import { BLOCK_QUEUE } from "../../../common/constants/bullQueue.js";
 
 @Injectable()
 export class BlockPollerService {
@@ -29,7 +29,6 @@ export class BlockPollerService {
       const activeChains = await this.db.query.chainMetadata.findMany({
         where: (table, { eq }) => eq(table.isActive, true),
       });
-      console.log(activeChains);
 
       for (const chain of activeChains) {
         await this.pollChain(chain.chainId, chain.confirmationBlocks);

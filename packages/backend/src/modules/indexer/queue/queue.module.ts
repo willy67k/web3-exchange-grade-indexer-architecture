@@ -1,24 +1,24 @@
 import { Module, Global } from "@nestjs/common";
 import { BullModule } from "@nestjs/bullmq";
-import { BLOCK_QUEUE } from "../../../constants/bullQueue.js";
-import { BlockConsumer } from "./block.consumer.js";
-import { IndexerModule } from "../indexer.module.js";
+import { BLOCK_QUEUE } from "../../../common/constants/bullQueue.js";
+import { AppConfigService } from "../../../config/config.service.js";
 
 @Global()
 @Module({
   imports: [
-    IndexerModule,
-    BullModule.forRoot({
-      connection: {
-        host: process.env.REDIS_HOST ?? "localhost",
-        port: parseInt(process.env.REDIS_PORT ?? "6379"),
-      },
+    BullModule.forRootAsync({
+      inject: [AppConfigService],
+      useFactory: (configService: AppConfigService) => ({
+        connection: {
+          host: configService.redisHost,
+          port: configService.redisPort,
+        },
+      }),
     }),
     BullModule.registerQueue({
       name: BLOCK_QUEUE,
     }),
   ],
-  providers: [BlockConsumer],
   exports: [BullModule],
 })
 export class QueueModule {}

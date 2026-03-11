@@ -1,8 +1,8 @@
 import { Module, Global } from "@nestjs/common";
-import { ConfigService } from "@nestjs/config";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import * as schema from "./schema.js";
+import { AppConfigService } from "../../config/config.service.js";
 
 export const DRIZZLE = "DRIZZLE_INSTANCE";
 
@@ -11,12 +11,9 @@ export const DRIZZLE = "DRIZZLE_INSTANCE";
   providers: [
     {
       provide: DRIZZLE,
-      inject: [ConfigService],
-      useFactory: (configService: ConfigService) => {
-        const connectionString = configService.get<string>("DATABASE_URL");
-        if (!connectionString) {
-          throw new Error("DATABASE_URL is not defined in config");
-        }
+      inject: [AppConfigService],
+      useFactory: (configService: AppConfigService) => {
+        const connectionString = configService.databaseUrl;
         const client = postgres(connectionString);
         return drizzle(client, { schema });
       },

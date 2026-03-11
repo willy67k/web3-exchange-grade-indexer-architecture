@@ -1,0 +1,30 @@
+src/
+├── app.controller.spec.ts
+├── app.controller.ts
+├── app.module.ts
+├── app.service.ts
+├── constants
+│   ├── blockchainTopic.ts
+│   └── bullQueue.ts
+├── main.ts
+└── modules
+    ├── blockchain
+    │   ├── blockchain.module.ts
+    │   ├── blockchain.service.ts
+    │   └── chain.registry.ts
+    ├── database
+    │   ├── database.module.ts
+    │   └── schema.ts
+    ├── demo
+    │   ├── demo.controller.ts
+    │   ├── demo.module.ts
+    │   └── demo.service.ts
+    └── indexer
+        ├── block-poller
+        │   ├── block-poller.module.ts
+        │   └── block-poller.service.ts
+        ├── block-processor
+        │   └── reorg.service.ts
+        └── queue
+            ├── block.consumer.ts
+            └── queue.module.ts

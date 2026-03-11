@@ -2,12 +2,15 @@ import { NestFactory } from "@nestjs/core";
 import { AppModule } from "./app.module.js";
 import { ValidationPipe } from "@nestjs/common";
 import { SwaggerModule, DocumentBuilder } from "@nestjs/swagger";
+import { AppConfigService } from "./config/config.service.js";
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+  const configService = app.get(AppConfigService);
+
   app.setGlobalPrefix("api/v1");
   app.enableCors({
-    origin: process.env.FRONTEND_URL,
+    origin: configService.frontendUrl,
     methods: "GET,HEAD,PUT,PATCH,POST,DELETE",
     credentials: true,
   });
@@ -28,7 +31,7 @@ async function bootstrap() {
     return app.getHttpAdapter().getInstance();
   }
 
-  await app.listen(process.env.PORT ?? 6970);
+  await app.listen(configService.port);
 }
 
 let handler;

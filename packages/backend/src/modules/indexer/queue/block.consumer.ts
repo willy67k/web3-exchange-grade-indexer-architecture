@@ -6,8 +6,8 @@ import { DRIZZLE } from "../../database/database.module.js";
 import { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import * as schema from "../../database/schema.js";
 import { eq, and } from "drizzle-orm";
-import { BLOCK_QUEUE } from "../../../constants/bullQueue.js";
-import { ERC20_TRANSFER_TOPIC } from "../../../constants/blockchainTopic.js";
+import { BLOCK_QUEUE } from "../../../common/constants/bullQueue.js";
+import { TOPICS } from "../../../common/constants/topics.js";
 import { ReorgService } from "../block-processor/reorg.service.js";
 
 @Processor(BLOCK_QUEUE)
@@ -26,7 +26,7 @@ export class BlockConsumer extends WorkerHost {
     const { chainId, blockNumber } = job.data;
 
     // 1. 獲取區塊與 Logs
-    const [block, logs] = await Promise.all([this.blockchainService.getBlock(chainId, blockNumber), this.blockchainService.getLogs(chainId, blockNumber, blockNumber, [ERC20_TRANSFER_TOPIC])]);
+    const [block, logs] = await Promise.all([this.blockchainService.getBlock(chainId, blockNumber), this.blockchainService.getLogs(chainId, blockNumber, blockNumber, [TOPICS.ERC20_TRANSFER])]);
 
     if (!block) throw new Error(`Block ${blockNumber} not found on chain ${chainId}`);
 
