@@ -1,14 +1,14 @@
 import { Processor, WorkerHost } from "@nestjs/bullmq";
 import { Job } from "bullmq";
 import { Inject, Logger } from "@nestjs/common";
-import { BlockchainService } from "../../blockchain/blockchain.service.js";
-import { DRIZZLE } from "../../database/database.module.js";
+import { BlockchainService } from "../../../modules/blockchain/blockchain.service.js";
+import { DRIZZLE } from "../../../modules/database/database.module.js";
 import { PostgresJsDatabase } from "drizzle-orm/postgres-js";
-import * as schema from "../../database/schema.js";
+import * as schema from "../../../modules/database/schema.js";
 import { eq, and } from "drizzle-orm";
-import { BLOCK_QUEUE } from "../../../common/constants/bullQueue.js";
-import { TOPICS } from "../../../common/constants/topics.js";
+import { IBlockListener } from "../listeners/base.listener.js";
 import { ReorgService } from "../block-processor/reorg.service.js";
+import { BLOCK_QUEUE } from "../../../common/constants/bullQueue.js";
 
 @Processor(BLOCK_QUEUE)
 export class BlockConsumer extends WorkerHost {
@@ -17,7 +17,8 @@ export class BlockConsumer extends WorkerHost {
   constructor(
     private readonly blockchainService: BlockchainService,
     private readonly reorgService: ReorgService,
-    @Inject(DRIZZLE) private db: PostgresJsDatabase<typeof schema>
+    @Inject(DRIZZLE) private db: PostgresJsDatabase<typeof schema>,
+    @Inject("BLOCK_LISTENERS") private listeners: IBlockListener[]
   ) {
     super();
   }
@@ -25,29 +26,18 @@ export class BlockConsumer extends WorkerHost {
   async process(job: Job<{ chainId: number; blockNumber: number }>) {
     const { chainId, blockNumber } = job.data;
 
-    // 1. 獲取區塊與 Logs
-    const [block, logs] = await Promise.all([this.blockchainService.getBlock(chainId, blockNumber), this.blockchainService.getLogs(chainId, blockNumber, blockNumber, [TOPICS.ERC20_TRANSFER])]);
+    // 1. 同時獲取區塊資訊與所有感興趣的 Logs (所有 Listener 的 Topics 聯集)
+    const topics = this.listeners.map((l) => l.topic);
+    const [block, logs] = await Promise.all([this.blockchainService.getBlock(chainId, blockNumber), this.blockchainService.getLogs(chainId, blockNumber, blockNumber, topics)]);
 
-    if (!block) throw new Error(`Block ${blockNumber} not found on chain ${chainId}`);
+    if (!block) throw new Error(`Block ${blockNumber} missing`);
 
-    // 2. 開啟原子級 DB Transaction
+    // 2. 執行原子交易
     await this.db.transaction(async (tx) => {
-      // A. Reorg 檢查 (檢查前一塊 Hash)
-      if (blockNumber > 1) {
-        const prevBlock = await tx.query.blocks.findFirst({
-          where: and(eq(schema.blocks.chainId, chainId), eq(schema.blocks.blockNumber, BigInt(blockNumber - 1))),
-        });
+      // A. Reorg 檢查：驗證前一塊 Hash 是否與當前區塊的 parentHash 一致
+      await this.checkReorg(tx, chainId, blockNumber, block.parentHash);
 
-        // 在 process 方法內的 catch 部分或偵測到 hash 不符時調用
-        if (prevBlock && prevBlock.blockHash !== block.parentHash) {
-          // 發現 Fork，調用回滾服務
-          await this.reorgService.handleReorg(chainId, blockNumber);
-          // 拋出錯誤讓 BullMQ 稍後重試這個任務（此時資料庫已清理乾淨，重試會從新鏈抓資料）
-          throw new Error(`Chain ${chainId} reorganization at ${blockNumber}, rolling back...`);
-        }
-      }
-
-      // B. 寫入區塊資訊
+      // B. 寫入區塊狀態
       await tx
         .insert(schema.blocks)
         .values({
@@ -63,64 +53,33 @@ export class BlockConsumer extends WorkerHost {
           set: { blockHash: block.hash!, status: "confirmed" },
         });
 
-      // C. 處理並解析 Logs
+      // C. 分發 Logs 給 Listeners 解析
       for (const log of logs) {
-        // ethers v6 解析方式 (簡單處理，實際可增加更強的 ABI Decoder)
-        const from = `0x${log.topics[1].slice(26)}`;
-        const to = `0x${log.topics[2].slice(26)}`;
-        const amount = BigInt(log.data).toString();
+        const listener = this.listeners.find((l) => l.topic === log.topics[0]);
+        if (!listener) continue;
 
-        // 寫入 erc20_transfers
-        await tx
-          .insert(schema.erc20Transfers)
-          .values({
-            chainId,
-            blockNumber: BigInt(blockNumber),
-            txHash: log.transactionHash,
-            logIndex: log.index,
-            tokenAddress: log.address.toLowerCase(),
-            fromAddress: from.toLowerCase(),
-            toAddress: to.toLowerCase(),
-            amount: amount,
-            status: "valid",
-          })
-          .onConflictDoNothing();
+        const { transfer, ledgerEntries } = listener.parse(log, chainId);
 
-        // D. 寫入 Ledger Entries (複式記帳邏輯)
-        // Debit From
-        await tx
-          .insert(schema.ledgerEntries)
-          .values({
-            chainId,
-            blockNumber: BigInt(blockNumber),
-            txHash: log.transactionHash,
-            logIndex: log.index,
-            account: from.toLowerCase(),
-            tokenAddress: log.address.toLowerCase(),
-            deltaAmount: `-${amount}`, // 支出為負
-            direction: "debit",
-            entryType: "erc20_transfer",
-          })
-          .onConflictDoNothing();
+        // 寫入 Transfer 原始紀錄
+        await tx.insert(schema.erc20Transfers).values(transfer).onConflictDoNothing();
 
-        // Credit To
-        await tx
-          .insert(schema.ledgerEntries)
-          .values({
-            chainId,
-            blockNumber: BigInt(blockNumber),
-            txHash: log.transactionHash,
-            logIndex: log.index,
-            account: to.toLowerCase(),
-            tokenAddress: log.address.toLowerCase(),
-            deltaAmount: amount, // 存入為正
-            direction: "credit",
-            entryType: "erc20_transfer",
-          })
-          .onConflictDoNothing();
+        // 寫入複式記帳 Ledger
+        for (const entry of ledgerEntries) {
+          await tx
+            .insert(schema.ledgerEntries)
+            .values({
+              ...entry,
+              chainId,
+              blockNumber: BigInt(blockNumber),
+              txHash: log.transactionHash,
+              logIndex: log.index,
+              entryType: listener.name.toLowerCase() as (typeof schema.ledgerEntryTypeEnum.enumValues)[number],
+            })
+            .onConflictDoNothing();
+        }
       }
 
-      // E. 更新同步進度
+      // D. 更新索引狀態
       await tx
         .insert(schema.indexerState)
         .values({
@@ -134,6 +93,21 @@ export class BlockConsumer extends WorkerHost {
         });
     });
 
-    this.logger.log(`Successfully processed block ${blockNumber} for chain ${chainId}`);
+    this.logger.log(`[Chain ${chainId}] Block ${blockNumber} processed.`);
+  }
+
+  private async checkReorg(tx: PostgresJsDatabase<typeof schema>, chainId: number, blockNumber: number, parentHash: string) {
+    if (blockNumber <= 1) return;
+
+    const prevBlock = await tx.query.blocks.findFirst({
+      where: and(eq(schema.blocks.chainId, chainId), eq(schema.blocks.blockNumber, BigInt(blockNumber - 1))),
+    });
+
+    if (prevBlock && prevBlock.blockHash !== parentHash) {
+      this.logger.error(`Reorg detected at ${blockNumber}!`);
+      // 這裡直接調用 reorgService.handleReorg，該服務會清理 DB 並重置 state
+      await this.reorgService.handleReorg(chainId, blockNumber);
+      throw new Error(`Reorg handled at ${blockNumber}, job will retry`);
+    }
   }
 }
