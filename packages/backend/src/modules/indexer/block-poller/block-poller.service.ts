@@ -29,6 +29,7 @@ export class BlockPollerService {
       const activeChains = await this.db.query.chainMetadata.findMany({
         where: (table, { eq }) => eq(table.isActive, true),
       });
+      console.log(activeChains);
 
       for (const chain of activeChains) {
         await this.pollChain(chain.chainId, chain.confirmationBlocks);

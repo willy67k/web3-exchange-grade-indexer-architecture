@@ -8,7 +8,7 @@ import { DemoModule } from "./modules/demo/demo.module.js";
 import { BlockchainModule } from "./modules/blockchain/blockchain.module.js";
 import { DatabaseModule } from "./modules/database/database.module.js";
 import { QueueModule } from "./modules/indexer/queue/queue.module.js";
-import { BlockPollerModule } from "./modules/indexer/block-poller/block-poller.module.js";
+import { IndexerModule } from "./modules/indexer/indexer.module.js";
 
 @Module({
   imports: [
@@ -20,8 +20,8 @@ import { BlockPollerModule } from "./modules/indexer/block-poller/block-poller.m
     DatabaseModule,
     DemoModule,
     BlockchainModule,
+    IndexerModule,
     QueueModule,
-    BlockPollerModule,
   ],
   controllers: [AppController],
   providers: [AppService],

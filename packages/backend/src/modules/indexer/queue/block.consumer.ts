@@ -8,6 +8,7 @@ import * as schema from "../../database/schema.js";
 import { eq, and } from "drizzle-orm";
 import { BLOCK_QUEUE } from "../../../constants/bullQueue.js";
 import { ERC20_TRANSFER_TOPIC } from "../../../constants/blockchainTopic.js";
+import { ReorgService } from "../block-processor/reorg.service.js";
 
 @Processor(BLOCK_QUEUE)
 export class BlockConsumer extends WorkerHost {
@@ -15,6 +16,7 @@ export class BlockConsumer extends WorkerHost {
 
   constructor(
     private readonly blockchainService: BlockchainService,
+    private readonly reorgService: ReorgService,
     @Inject(DRIZZLE) private db: PostgresJsDatabase<typeof schema>
   ) {
     super();
@@ -36,9 +38,12 @@ export class BlockConsumer extends WorkerHost {
           where: and(eq(schema.blocks.chainId, chainId), eq(schema.blocks.blockNumber, BigInt(blockNumber - 1))),
         });
 
+        // 在 process 方法內的 catch 部分或偵測到 hash 不符時調用
         if (prevBlock && prevBlock.blockHash !== block.parentHash) {
-          // 這裡拋出錯誤會導致 Job 失敗並進入重試，或在此觸發 ReorgService
-          throw new Error(`Reorg detected at block ${blockNumber}! Expected parent ${prevBlock.blockHash}, got ${block.parentHash}`);
+          // 發現 Fork，調用回滾服務
+          await this.reorgService.handleReorg(chainId, blockNumber);
+          // 拋出錯誤讓 BullMQ 稍後重試這個任務（此時資料庫已清理乾淨，重試會從新鏈抓資料）
+          throw new Error(`Chain ${chainId} reorganization at ${blockNumber}, rolling back...`);
         }
       }
 
