@@ -1,5 +1,5 @@
 import { Global, Module } from "@nestjs/common";
-import { ConfigModule, ConfigService } from "@nestjs/config";
+import { ConfigModule } from "@nestjs/config";
 import { AppConfigService } from "./config.service.js";
 
 @Global()
@@ -13,8 +13,4 @@ import { AppConfigService } from "./config.service.js";
   providers: [AppConfigService],
   exports: [AppConfigService],
 })
-export class AppConfigModule {
-  constructor(private config: ConfigService) {
-    console.log(this.config.getOrThrow<string>("DATABASE_URL"));
-  }
-}
+export class AppConfigModule {}

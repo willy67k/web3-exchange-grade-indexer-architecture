@@ -7,6 +7,7 @@ import { DRIZZLE } from "../../database/database.module.js";
 import { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import * as schema from "../../database/schema.js";
 import { BLOCK_QUEUE } from "../../../common/constants/bullQueue.js";
+import { ConfirmationStrategy } from "./confirmation.strategy.js"; // 導入策略
 
 @Injectable()
 export class BlockPollerService {
@@ -16,6 +17,7 @@ export class BlockPollerService {
   constructor(
     @InjectQueue(BLOCK_QUEUE) private blockQueue: Queue,
     private readonly blockchainService: BlockchainService,
+    private readonly confirmationStrategy: ConfirmationStrategy, // 1. 注入策略
     @Inject(DRIZZLE) private db: PostgresJsDatabase<typeof schema>
   ) {}
 
@@ -31,7 +33,8 @@ export class BlockPollerService {
       });
 
       for (const chain of activeChains) {
-        await this.pollChain(chain.chainId, chain.confirmationBlocks);
+        // 2. 這裡不再直接傳數字，交給 pollChain 內部處理或傳遞 chain 物件
+        await this.pollChain(chain.chainId);
       }
     } catch (error) {
       this.logger.error(`Polling error: ${error.message}`);
@@ -40,10 +43,13 @@ export class BlockPollerService {
     }
   }
 
-  private async pollChain(chainId: number, confirmationBlocks: number) {
-    // 2. 獲取鏈上最新高度
+  private async pollChain(chainId: number) {
+    // 3. 獲取鏈上最新高度
     const currentRpcBlock = await this.blockchainService.getLatestBlockNumber(chainId);
-    const safeBlock = currentRpcBlock - confirmationBlocks;
+
+    // 4. 使用策略獲取該鏈的安全深度
+    const confirmationDepth = await this.confirmationStrategy.getConfirmationDepth(chainId);
+    const safeBlock = currentRpcBlock - confirmationDepth;
 
     // 3. 從資料庫獲取上次同步的高度
     let state = await this.db.query.indexerState.findFirst({
@@ -66,7 +72,7 @@ export class BlockPollerService {
     const endBlock = safeBlock;
 
     if (startBlock <= endBlock) {
-      this.logger.log(`Chain ${chainId}: Dispatching blocks ${startBlock} -> ${endBlock}`);
+      this.logger.log(`Chain ${chainId}: Dispatching blocks ${startBlock} -> ${endBlock} (Depth: ${confirmationDepth})`);
 
       // 4. 將區塊批次丟入 BullMQ
       const jobs = [];
