@@ -5,10 +5,11 @@ import { BlockchainService } from "../../../modules/blockchain/blockchain.servic
 import { DRIZZLE } from "../../../modules/database/database.module.js";
 import { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import * as schema from "../../../modules/database/schema.js";
-import { eq, and } from "drizzle-orm";
+import { eq, and, sql } from "drizzle-orm";
 import { IBlockListener } from "../listeners/base.listener.js";
 import { ReorgService } from "../block-processor/reorg.service.js";
 import { BLOCK_QUEUE } from "../../../common/constants/bullQueue.js";
+import { BLOCK_LISTENERS } from "../../../common/constants/blockListener.js";
 
 @Processor(BLOCK_QUEUE)
 export class BlockConsumer extends WorkerHost {
@@ -18,7 +19,7 @@ export class BlockConsumer extends WorkerHost {
     private readonly blockchainService: BlockchainService,
     private readonly reorgService: ReorgService,
     @Inject(DRIZZLE) private db: PostgresJsDatabase<typeof schema>,
-    @Inject("BLOCK_LISTENERS") private listeners: IBlockListener[]
+    @Inject(BLOCK_LISTENERS) private listeners: IBlockListener[]
   ) {
     super();
   }
@@ -85,11 +86,16 @@ export class BlockConsumer extends WorkerHost {
         .values({
           chainId,
           lastProcessedBlock: BigInt(blockNumber),
-          lastSafeBlock: BigInt(blockNumber),
+          lastSafeBlock: BigInt(blockNumber), // 初始插入時設為同值
+          updatedAt: new Date(),
         })
         .onConflictDoUpdate({
           target: [schema.indexerState.chainId],
-          set: { lastProcessedBlock: BigInt(blockNumber), updatedAt: new Date() },
+          set: {
+            // 這裡只更新 Processed，不更新 Safe，交給 StatusSyncService 處理
+            lastProcessedBlock: sql`GREATEST(${schema.indexerState.lastProcessedBlock}, ${BigInt(blockNumber)})`,
+            updatedAt: new Date(),
+          },
         });
     });
 

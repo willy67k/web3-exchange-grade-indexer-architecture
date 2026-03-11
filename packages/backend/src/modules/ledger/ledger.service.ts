@@ -1,16 +1,10 @@
 import { Injectable, BadRequestException } from "@nestjs/common";
 import { LedgerRepository } from "./ledger.repository.js";
 import { isAddress } from "ethers";
-import { BlockchainService } from "../blockchain/blockchain.service.js";
-import { ConfirmationStrategy } from "../indexer/block-poller/confirmation.strategy.js";
 
 @Injectable()
 export class LedgerService {
-  constructor(
-    private readonly repo: LedgerRepository,
-    private readonly blockchainService: BlockchainService, // 用於獲取當前高度
-    private readonly confirmationStrategy: ConfirmationStrategy // 注入策略
-  ) {}
+  constructor(private readonly repo: LedgerRepository) {}
 
   async getAccountBalance(
     chainId: number,
@@ -25,13 +19,8 @@ export class LedgerService {
     let rawBalance: string;
 
     if (isFinalizedOnly) {
-      // 1. 獲取當前高度與該鏈的安全深度
-      const [currentBlock, depth] = await Promise.all([this.blockchainService.getLatestBlockNumber(chainId), this.confirmationStrategy.getConfirmationDepth(chainId)]);
-
-      const safeBoundary = currentBlock - depth;
-
-      // 2. 呼叫 Repository 獲取安全水位以下的餘額
-      rawBalance = await this.repo.getFinalizedBalance(chainId, account, tokenAddress, safeBoundary);
+      // 呼叫 Repository 獲取安全水位以下的餘額
+      rawBalance = await this.repo.getFinalizedBalance(chainId, account, tokenAddress);
     } else {
       // 獲取目前資料庫中已同步的所有餘額
       rawBalance = await this.repo.getBalance(chainId, account, tokenAddress);

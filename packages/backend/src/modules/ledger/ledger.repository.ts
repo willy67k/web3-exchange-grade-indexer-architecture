@@ -29,10 +29,18 @@ export class LedgerRepository {
     });
   }
 
-  async getFinalizedBalance(chainId: number, account: string, tokenAddress: string, safeBoundary: number) {
+  async getFinalizedBalance(chainId: number, account: string, tokenAddress: string) {
+    // 1. 從進度表拿到該鏈的「安全水位線」
+    const state = await this.db.query.indexerState.findFirst({
+      where: (table, { eq }) => eq(table.chainId, chainId),
+    });
+
+    const safeLimit = state?.lastSafeBlock ?? 0n;
+
+    // 2. 查詢特定代幣、特定帳戶、在安全區塊內的餘額
     const [result] = await this.db
       .select({
-        balance: sql<string>`COALESCE(SUM(${schema.ledgerEntries.deltaAmount}), 0)`,
+        balance: sql<string>`COALESCE(SUM(${schema.ledgerEntries.deltaAmount}), '0')`,
       })
       .from(schema.ledgerEntries)
       .where(
@@ -40,9 +48,10 @@ export class LedgerRepository {
           eq(schema.ledgerEntries.chainId, chainId),
           eq(schema.ledgerEntries.account, account.toLowerCase()),
           eq(schema.ledgerEntries.tokenAddress, tokenAddress.toLowerCase()),
-          sql`${schema.ledgerEntries.blockNumber} <= ${safeBoundary}` // 只計算安全區塊
+          sql`${schema.ledgerEntries.blockNumber} <= ${safeLimit}`
         )
       );
-    return result.balance;
+
+    return result?.balance || "0";
   }
 }
