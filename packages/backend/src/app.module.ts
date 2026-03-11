@@ -8,9 +8,10 @@ import { BlockchainModule } from "./modules/blockchain/blockchain.module.js";
 import { DatabaseModule } from "./modules/database/database.module.js";
 import { IndexerModule } from "./modules/indexer/indexer.module.js";
 import { LedgerModule } from "./modules/ledger/ledger.module.js";
+import { DomainModule } from "./modules/domain/domain.module.js";
 
 @Module({
-  imports: [AppConfigModule, ScheduleModule.forRoot(), DatabaseModule, DemoModule, BlockchainModule, IndexerModule, LedgerModule],
+  imports: [AppConfigModule, ScheduleModule.forRoot(), DatabaseModule, DemoModule, BlockchainModule, IndexerModule, LedgerModule, DomainModule],
   controllers: [AppController],
   providers: [AppService],
 })
