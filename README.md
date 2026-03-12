@@ -1,233 +1,134 @@
 # Web3 Exchange-Grade Indexer Architecture (NestJS)
 
-# 🎯 系統目標（Architecture Goals）
+A high-performance Multi-Chain ERC20 token listener and indexer system built with **NestJS** and **React**.
+The system adopts an asynchronous architecture using **BullMQ** (Redis) to handle high-concurrency block data and **Drizzle ORM** with **PostgreSQL** for persistent storage.
 
-這個架構不是「抓 log 玩玩」。
+這是一個基於 **NestJS** 與 **React** 開發的高效能多鏈 ERC20 代幣監聽與索引系統。
+專案採用非同步架構，透過 **BullMQ** (Redis) 處理高併發區塊數據，並使用 **Drizzle ORM** 搭配 **PostgreSQL** 進行資料持久化。
 
-它要達成的是：
+---
 
-## 正確性（Correctness）
+## 🚀 Key Features | 專案亮點
 
-- 不漏事件
-- 不重複寫入
-- Reorg 不污染資料
-- 資料可重建（Full Replay）
+- **Multi-Chain Support (多鏈支援)**: Extensible listener architecture that supports monitoring ERC20 events across multiple chains simultaneously.
+- **Asynchronous Processing (異步處理)**: Utilizes **BullMQ** message queues to implement a producer-consumer patron for stable block indexing.
+- **High-Performance ORM (高性能 ORM)**: Powered by **Drizzle ORM**, providing type safety with minimal runtime overhead.
+- **Modern Frontend (現代化前端)**: Built with React 19, Vite, and Tailwind CSS v4 for a smooth data visualization experience.
+- **Monorepo Management (Monorepo 管理)**: Managed via **Turborepo** for unified dependency handling and optimized build workflows.
 
-## 一致性（Consistency）
+---
 
-- 1 Block = 1 Atomic DB Transaction
-- 不允許半個 block commit
-- 不允許多 worker 同時提交同 block
+## 🛠 Tech Stack | 技術棧
 
-## 可回滾（Reorg Safe）
+### Backend (packages/backend)
 
-- 可偵測 fork
-- 可自動 rollback
-- 可從 fork point 重建資料
+- **Framework**: [NestJS](https://nestjs.com/)
+- **Blockchain Library**: [Ethers.js v6](https://docs.ethers.org/v6/)
+- **Database**: [PostgreSQL](https://www.postgresql.org/) + [Drizzle ORM](https://orm.drizzle.team/)
+- **Queue System**: [BullMQ](https://docs.bullmq.io/) (Redis)
+- **Logging**: [Pino](https://github.com/pinojs/pino)
+- **Validation**: Class-validator & Class-transformer
 
-## Append-only Ledger
+### Frontend (packages/frontend)
 
-- 不直接更新 balance
-- 所有資產變動寫入 ledger_entries
-- Balance 由聚合計算
+- **Framework**: [React 19](https://react.dev/)
+- **Build Tool**: [Vite](https://vitejs.dev/)
+- **Styling**: [Tailwind CSS v4](https://tailwindcss.com/)
+- **HTTP Client**: Axios
 
-## 5️⃣ 可擴展（Scalable）
+### Infrastructure
 
-- 支援多鏈
-- 支援多合約
-- 支援分段重建
+- **Docker**: For deploying isolated PostgreSQL and Redis environments.
 
-## 🏗 系統整體架構
+---
 
-```
-RPC Provider
-│
-▼
-Block Poller (single instance)
-│
-▼
-Redis Queue
-│
-▼
-Block Worker (1 block = 1 job)
-│
-▼
-PostgreSQL (ACID)
-```
+## 📦 Quick Start | 快速啟動
 
-## 🧠 核心設計原則
+### 1. Prerequisites | 先決條件
 
-### Block 是最小原子單位
+Ensure you have the following installed:
 
-1 Block = 1 DB Transaction
+- [Node.js](https://nodejs.org/) (v20+ recommended)
+- [npm](https://www.npmjs.com/) or [yarn](https://yarnpkg.com/)
+- [Docker](https://www.docker.com/) & [Docker Compose](https://docs.docker.com/compose/)
 
-### 不允許
+### 2. Install Dependencies | 安裝依賴
 
-- log 級 commit
-- tx 級 commit
-- 部分 block commit
+Run the following in the project root:
 
-## 資料庫設計（PostgreSQL）
-
-### 1️⃣ blocks
-
-```sql
-CREATE TABLE blocks (
-  block_number BIGINT PRIMARY KEY,
-  block_hash TEXT NOT NULL,
-  parent_hash TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'confirmed',
-  created_at TIMESTAMP DEFAULT NOW()
-);
+```bash
+npm install
+# or
+yarn install
 ```
 
-說明
+### 3. Start Infrastructure | 啟動基礎設施
 
-- 用來偵測 reorg
-- status:
-  - confirmed
-  - orphaned
+Spin up the required services using Docker:
 
-### 2️⃣ erc20_transfers
+```bash
+# Start PostgreSQL (Default port: 5432)
+docker-compose -f docker-compose.postgre.yml up -d
 
-```sql
-CREATE TABLE erc20_transfers (
-  id BIGSERIAL PRIMARY KEY,
-  tx_hash TEXT NOT NULL,
-  log_index INT NOT NULL,
-  block_number BIGINT NOT NULL,
-  token_address TEXT NOT NULL,
-  from_address TEXT NOT NULL,
-  to_address TEXT NOT NULL,
-  amount NUMERIC NOT NULL,
-  created_at TIMESTAMP DEFAULT NOW(),
-
-  UNIQUE(tx_hash, log_index)
-);
+# Start Redis (Default port: 6379)
+docker-compose -f docker-compose.redis.yml up -d
 ```
 
-為什麼要 UNIQUE(tx_hash, log_index)？
+### 4. Configuration | 環境變數設定
 
-- 避免重抓
-- 避免重啟重寫
-- 確保 idempotency
+Navigate to `packages/backend`, and create a `.env` file from the example:
 
-### 3️⃣ ledger_entries（核心）
-
-```sql
-CREATE TABLE ledger_entries (
-  id BIGSERIAL PRIMARY KEY,
-  block_number BIGINT NOT NULL,
-  tx_hash TEXT NOT NULL,
-  log_index INT NOT NULL,
-  account TEXT NOT NULL,
-  token_address TEXT NOT NULL,
-  delta_amount NUMERIC NOT NULL,
-  direction TEXT NOT NULL,
-  created_at TIMESTAMP DEFAULT NOW(),
-
-  UNIQUE(tx_hash, log_index, account)
-);
+```bash
+cp packages/backend/.env.example packages/backend/.env
 ```
 
-原則
+Edit `.env` and provide your **RPC_URL** and **DATABASE_URL**.
 
-- 永遠 INSERT
-- 永遠不 UPDATE
-- 永遠不 DELETE（除非 reorg）
+### 5. Database Migrations (Drizzle) | 資料庫遷移
 
-### Balance 計算方式
+Initialize your database schema:
 
-```sql
-SELECT SUM(delta_amount)
-FROM ledger_entries
-WHERE account = $1
-AND token_address = $2;
+```bash
+cd packages/backend
+
+# Generate migration files
+npx drizzle-kit generate
+
+# Apply migrations to the database
+npx drizzle-kit migrate
 ```
 
-## Reorg Handling 流程
+_Note: You can also use `npx drizzle-kit push` for rapid development testing._
 
-### Step 1 — 偵測
+### 6. Start Development Server | 啟動開發伺服器
 
-```ts
-if (chainBlock.hash !== dbBlock.block_hash) {
-  reorgDetected();
-}
+From the project root:
+
+```bash
+# Start both backend and frontend in dev mode using Turbo
+npm run dev
 ```
 
-### Step 2 — 找 fork point
+---
 
-從最新 block 向後比對 parent_hash
+## 📂 Project Structure | 目錄結構
 
-### Step 3 — Rollback
-
-```sql
-DELETE FROM ledger_entries
-WHERE block_number >= fork_point;
-
-DELETE FROM erc20_transfers
-WHERE block_number >= fork_point;
-
-DELETE FROM blocks
-WHERE block_number >= fork_point;
+```text
+multi-chain-erc20-indexer/
+├── packages/
+│   ├── backend/          # NestJS backend service
+│   │   ├── src/
+│   │   │   ├── blockchain/   # Chain interaction & Provider management
+│   │   │   ├── indexer/      # Data indexing & BullMQ processing
+│   │   │   └── database/     # Drizzle Schema & Database Module
+│   │   └── drizzle/          # Auto-generated migration files
+│   └── frontend/         # React frontend application
+├── docker-compose.postgre.yml # PostgreSQL configuration
+├── docker-compose.redis.yml   # Redis configuration
+├── turbo.json                 # Turborepo configuration
+└── package.json               # Root scripts
 ```
 
-### Step 4 — 重新處理 fork_point 之後區塊
+## 📄 License
 
-## Block Worker Transaction 範例流程
-
-```ts
-await db.transaction(async (tx) => {
-  // 1. insert transfers
-  // 2. insert ledger entries
-  // 3. insert block record
-});
-```
-
-如果其中任何一個失敗：
-
-```
-ROLLBACK entire block
-```
-
-## Confirmation Strategy
-
-推薦做法：
-
-```
-process until currentBlock - 12
-```
-
-這樣可以：
-
-- 幾乎避免 reorg
-- 降低 rollback 成本
-
-## 多鏈支援設計
-
-增加 chain_id 欄位：
-
-```sql
-ALTER TABLE blocks ADD COLUMN chain_id INT NOT NULL;
-ALTER TABLE ledger_entries ADD COLUMN chain_id INT NOT NULL;
-ALTER TABLE erc20_transfers ADD COLUMN chain_id INT NOT NULL;
-```
-
-Primary Key 改為：
-
-```
-(chain_id, block_number)
-```
-
-## 系統要達到的最終能力
-
-| 能力          | 是否達成 |
-| ------------- | -------- |
-| 可補歷史      | ✅       |
-| 可即時追蹤    | ✅       |
-| 可偵測 reorg  | ✅       |
-| 可 rollback   | ✅       |
-| 資料可 replay | ✅       |
-| Ledger 一致性 | ✅       |
-| 多鏈支援      | ✅       |
-| 交易所級設計  | ✅       |
+[MIT License](LICENSE)
